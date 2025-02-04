@@ -31,7 +31,7 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
     bl_label = 'Limited Dissolve'
     bl_icon = 'MOD_DECIM'
 
-    angle: FloatProperty(default=5.0, min=0.0, update=updateNode)
+    angle: FloatProperty(default=0.1, min=0.0, update=updateNode)
     use_dissolve_boundaries: BoolProperty(update=updateNode)
 
     def sv_init(self, context):
