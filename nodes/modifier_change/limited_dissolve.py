@@ -17,6 +17,7 @@
 # ##### END GPL LICENSE BLOCK #####
 
 import bpy
+import math
 from bpy.props import BoolProperty, FloatProperty
 from bmesh.ops import dissolve_limit
 
@@ -24,7 +25,6 @@ from sverchok.node_tree import SverchCustomTreeNode
 from sverchok.data_structure import updateNode, match_long_repeat
 from sverchok.utils.sv_bmesh_utils import bmesh_from_pydata, pydata_from_bmesh
 from sverchok.utils.nodes_mixins.sockets_config import ModifierNode
-
 
 class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
     ''' Limited Dissolve '''
@@ -47,7 +47,6 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         self.outputs.new('SvStringsSocket', 'Polys')
 
     def draw_buttons(self, context, layout):
-        row = layout.row(align=True)
         layout.prop(self, "use_dissolve_boundaries")
 
     def process(self):
@@ -58,14 +57,25 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         edges = self.inputs['Edges'].sv_get(default=[[]], deepcopy=False)
         faces = self.inputs['Polys'].sv_get(default=[[]], deepcopy=False)
 
+        # Retrieve the angle value.
         if 'Angle' in self.inputs and self.inputs['Angle'].is_linked:
-            angle_input = self.inputs['Angle'].sv_get(default=[self.angle])
-            try:
-                angle_input = [float(val) for val in angle_input]
-            except Exception:
-                angle_input = [self.angle]
+            angle_values = self.inputs['Angle'].sv_get(default=[self.angle])
+            if isinstance(angle_values[0], (list, tuple)):
+                try:
+                    angle_value = float(angle_values[0][0])
+                except Exception:
+                    angle_value = self.angle
+            else:
+                try:
+                    angle_value = float(angle_values[0])
+                except Exception:
+                    angle_value = self.angle
         else:
-            angle_input = [self.angle]
+            angle_value = self.angle
+
+        # Convert the angle from degrees to radians.
+        angle_value_rad = angle_value * math.pi / 180.0
+        angle_input = [angle_value_rad]
 
         meshes = match_long_repeat([verts, edges, faces, angle_input])
 
@@ -76,9 +86,12 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         for verts, edges, faces, angle_value in zip(*meshes):
             bm = bmesh_from_pydata(verts, edges, faces, normal_update=True)
             dissolve_limit(
-                bm, angle_limit=angle_value,
+                bm,
+                angle_limit=angle_value,
                 use_dissolve_boundaries=self.use_dissolve_boundaries,
-                verts=bm.verts,edges=bm.edges)
+                verts=bm.verts,
+                edges=bm.edges
+            )
             new_verts, new_edges, new_faces = pydata_from_bmesh(bm)
             bm.free()
 
@@ -90,10 +103,8 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         self.outputs['Edges'].sv_set(r_edges)
         self.outputs['Polys'].sv_set(r_faces)
 
-
 def register():
     bpy.utils.register_class(SvLimitedDissolve)
-
 
 def unregister():
     bpy.utils.unregister_class(SvLimitedDissolve)
