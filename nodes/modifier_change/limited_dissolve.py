@@ -39,13 +39,15 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         self.inputs.new('SvVerticesSocket', 'Verts')
         self.inputs.new('SvStringsSocket', 'Edges')
         self.inputs.new('SvStringsSocket', 'Polys')
+        angle_socket = self.inputs.new('SvStringsSocket', 'Angle')
+        angle_socket.prop_name = 'angle'
 
         self.outputs.new('SvVerticesSocket', 'Verts')
         self.outputs.new('SvStringsSocket', 'Edges')
         self.outputs.new('SvStringsSocket', 'Polys')
 
     def draw_buttons(self, context, layout):
-        layout.prop(self, "angle")
+        row = layout.row(align=True)
         layout.prop(self, "use_dissolve_boundaries")
 
     def process(self):
@@ -55,18 +57,28 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         verts = self.inputs['Verts'].sv_get(deepcopy=False)
         edges = self.inputs['Edges'].sv_get(default=[[]], deepcopy=False)
         faces = self.inputs['Polys'].sv_get(default=[[]], deepcopy=False)
-        meshes = match_long_repeat([verts, edges, faces])
+
+        if 'Angle' in self.inputs and self.inputs['Angle'].is_linked:
+            angle_input = self.inputs['Angle'].sv_get(default=[self.angle])
+            try:
+                angle_input = [float(val) for val in angle_input]
+            except Exception:
+                angle_input = [self.angle]
+        else:
+            angle_input = [self.angle]
+
+        meshes = match_long_repeat([verts, edges, faces, angle_input])
 
         r_verts = []
         r_edges = []
         r_faces = []
 
-        for verts, edges, faces in zip(*meshes):
+        for verts, edges, faces, angle_value in zip(*meshes):
             bm = bmesh_from_pydata(verts, edges, faces, normal_update=True)
-            ret = dissolve_limit(
-                bm, angle_limit=self.angle,
+            dissolve_limit(
+                bm, angle_limit=angle_value,
                 use_dissolve_boundaries=self.use_dissolve_boundaries,
-                verts=bm.verts, edges=bm.edges)
+                verts=bm.verts,edges=bm.edges)
             new_verts, new_edges, new_faces = pydata_from_bmesh(bm)
             bm.free()
 
