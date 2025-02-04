@@ -73,7 +73,7 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
             angle_value = self.angle
 
         # Convert the angle from degrees to radians.
-        angle_value_rad = angle_value * math.pi / 180.0
+        angle_value_rad = angle_value * 3.14159265 / 180.0
         angle_input = [angle_value_rad]
 
         meshes = match_long_repeat([verts, edges, faces, angle_input])
@@ -84,13 +84,10 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
 
         for verts, edges, faces, angle_value in zip(*meshes):
             bm = bmesh_from_pydata(verts, edges, faces, normal_update=True)
-            dissolve_limit(
-                bm,
-                angle_limit=angle_value,
+            ret = dissolve_limit(
+                bm,angle_limit=angle_value,
                 use_dissolve_boundaries=self.use_dissolve_boundaries,
-                verts=bm.verts,
-                edges=bm.edges
-            )
+                verts=bm.verts,edges=bm.edges)
             new_verts, new_edges, new_faces = pydata_from_bmesh(bm)
             bm.free()
 
