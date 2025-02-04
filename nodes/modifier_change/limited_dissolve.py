@@ -25,6 +25,7 @@ from sverchok.data_structure import updateNode, match_long_repeat
 from sverchok.utils.sv_bmesh_utils import bmesh_from_pydata, pydata_from_bmesh
 from sverchok.utils.nodes_mixins.sockets_config import ModifierNode
 
+
 class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
     ''' Limited Dissolve '''
     bl_idname = 'SvLimitedDissolve'
@@ -82,9 +83,9 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         for verts, edges, faces, angle_value in zip(*meshes):
             bm = bmesh_from_pydata(verts, edges, faces, normal_update=True)
             ret = dissolve_limit(
-                bm,angle_limit=angle_value,
+                bm, angle_limit=angle_value,
                 use_dissolve_boundaries=self.use_dissolve_boundaries,
-                verts=bm.verts,edges=bm.edges)
+                verts=bm.verts, edges=bm.edges)
             new_verts, new_edges, new_faces = pydata_from_bmesh(bm)
             bm.free()
 
