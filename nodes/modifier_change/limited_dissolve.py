@@ -72,9 +72,7 @@ class SvLimitedDissolve(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         else:
             angle_value = self.angle
 
-        # Convert the angle from degrees to radians
-        angle_input = [angle_value * 3.14159265 / 180.0]
-
+        angle_input = [angle_value]
         meshes = match_long_repeat([verts, edges, faces, angle_input])
 
         r_verts = []
