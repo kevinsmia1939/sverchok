@@ -17,7 +17,6 @@
 # ##### END GPL LICENSE BLOCK #####
 
 import bpy
-import math
 from bpy.props import BoolProperty, FloatProperty
 from bmesh.ops import dissolve_limit
 
