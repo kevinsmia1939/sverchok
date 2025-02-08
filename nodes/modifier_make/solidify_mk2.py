@@ -93,7 +93,7 @@ def solidify(vertices, edges, faces, thickness, offset=None, even=True, output_e
                  e.verts[1].index + v_len,
                  e.verts[0].index + v_len]
                 for e in bm.edges if e.is_boundary]
-                
+
     faces_out = [f[::-1] for f in faces] + new_pols + rim_pols
     pol_group = [0] * len(faces) + [1] * len(new_pols) + [2] * len(rim_pols)
 
@@ -113,7 +113,7 @@ def solidify_blender(vertices, edges, faces, t, offset=None, even=True, output_e
 
     bm = bmesh_from_pydata(vertices, [], faces, normal_update=True)
     geom_in = bm.verts[:] + bm.edges[:] + bm.faces[:]
-    bmesh.ops.solidify(bm, geom=geom_in, thickness=t[0])
+    bmesh.ops.solidify(bm, geom=geom_in, thickness=t[0], offset=offset)
 
     edges = []
     faces = []
@@ -167,7 +167,6 @@ class SvSolidifyNodeMk2(ModifierNode, SverchCustomTreeNode, bpy.types.Node):
         default=True, update=updateNode)
 
     def update_sockets(self, context):
-        self.inputs['Offset'].hide_safe = self.implementation == 'Blender'
         updateNode(self, context)
 
     implementation: EnumProperty(
