@@ -5,10 +5,6 @@
 # SPDX-License-Identifier: GPL3
 # License-Filename: LICENSE
 
-import os
-import site
-import sys
-
 import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
@@ -21,13 +17,6 @@ SURFACE_SIDE_ITEMS = [
     ("SIDE_A", "Side A", "Fill one side of the input surface"),
     ("SIDE_B", "Side B", "Fill the opposite side of the input surface"),
 ]
-
-
-def _ensure_pyvista_on_path():
-    paths = [site.getusersitepackages()]
-    for path in paths:
-        if os.path.isdir(path) and path not in sys.path:
-            sys.path.insert(0, path)
 
 
 def _polydata_from_sverchok_mesh(vertices, faces):
@@ -119,8 +108,6 @@ def fill_surface_side(
     padding,
     flip_side,
 ):
-    _ensure_pyvista_on_path()
-
     surface = _polydata_from_sverchok_mesh(vertices, faces)
     if surface is None:
         return [], [], []

@@ -23,8 +23,10 @@ instead of actual module, so that one can execute another version of code:
 
 todo: Create dependencies.txt file and import modules from there
 """
-import bpy
 import logging
+from importlib.util import find_spec
+
+import bpy
 
 import sverchok.settings as settings
 
@@ -134,11 +136,8 @@ except ImportError:
 
 pyvista_d = sv_dependencies["pyvista"] = SvDependency("pyvista", "https://pyvista.org/")
 pyvista_d.pip_installable = True
-try:
-    import pyvista
-    pyvista_d.module = pyvista
-except ImportError:
-    pyvista = None
+if find_spec("pyvista") is not None:
+    pyvista_d.module = True
 
 mcubes_d = sv_dependencies["mcubes"] = SvDependency("mcubes", "https://github.com/pmneila/PyMCubes")
 try:
