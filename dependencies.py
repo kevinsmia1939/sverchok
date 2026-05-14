@@ -133,10 +133,17 @@ try:
 except ImportError:
     skimage = None
 
+# pyvista_d = sv_dependencies["pyvista"] = SvDependency("pyvista", "https://pyvista.org/")
+# pyvista_d.pip_installable = True
+# if find_spec("pyvista") is not None:
+#     pyvista_d.module = True
+
 pyvista_d = sv_dependencies["pyvista"] = SvDependency("pyvista", "https://pyvista.org/")
-pyvista_d.pip_installable = True
-if find_spec("pyvista") is not None:
-    pyvista_d.module = True
+try:
+    import pyvista
+    pyvista_d.module = pyvista
+except ImportError:
+    pyvista = None
 
 mcubes_d = sv_dependencies["mcubes"] = SvDependency("mcubes", "https://github.com/pmneila/PyMCubes")
 try:
