@@ -31,6 +31,7 @@ import sverchok.settings as settings
 
 logger = logging.getLogger('sverchok')
 
+
 class SvDependency():
     """
     Definition of external dependency package.
