@@ -23,10 +23,9 @@ instead of actual module, so that one can execute another version of code:
 
 todo: Create dependencies.txt file and import modules from there
 """
+import bpy
 import logging
 from importlib.util import find_spec
-
-import bpy
 
 import sverchok.settings as settings
 
