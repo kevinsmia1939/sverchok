@@ -23,22 +23,13 @@ instead of actual module, so that one can execute another version of code:
 
 todo: Create dependencies.txt file and import modules from there
 """
-import logging
-import os
-import site
-import sys
-
 import bpy
+import logging
 
 import sverchok.settings as settings
 
 
 logger = logging.getLogger('sverchok')
-
-user_site = site.getusersitepackages()
-if os.path.isdir(user_site) and user_site not in sys.path:
-    sys.path.insert(0, user_site)
-
 
 class SvDependency():
     """
