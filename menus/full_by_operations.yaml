@@ -248,6 +248,7 @@
             - SvMeshJoinNodeMk2
             - ---
             - SvFillsHoleNodeMK2
+            - SvSurfaceSideFillNode
             - SvRecalcNormalsNode
             - SvFlipNormalsNode
             - SvQuadGridSortVertsNode
@@ -1086,4 +1087,3 @@
     - custom_menu: NODEVIEW_MT_AddPresetMenu
     - icon_name: SETTINGS
     - extra_menu: UiToolsPartialMenu
-

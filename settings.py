@@ -636,8 +636,8 @@ dependencies, or install only some of them.""")
         box = layout.box()
         box.label(text="Dependencies:")
         # please, not activate pyOpenSubdiv and pyQuadriFlow it crashes sverchok sometimes
-        package_names_allatonce = ["scipy", "geomdl", "skimage", "mcubes", "circlify", "cython", "numba", "numexpr", "ezdxf", "pyacvd", "pySVCGAL", "spyrrow"]
-        package_names = ["scipy", "geomdl", "skimage", "mcubes", "circlify", "cython", "numba", "numexpr", "ezdxf", "pyacvd", "pySVCGAL", "spyrrow","pyOpenSubdiv","pyQuadriFlow"]
+        package_names_allatonce = ["scipy", "geomdl", "skimage", "pyvista", "mcubes", "circlify", "cython", "numba", "numexpr", "ezdxf", "pyacvd", "pySVCGAL", "spyrrow"]
+        package_names = ["scipy", "geomdl", "skimage", "pyvista", "mcubes", "circlify", "cython", "numba", "numexpr", "ezdxf", "pyacvd", "pySVCGAL", "spyrrow","pyOpenSubdiv","pyQuadriFlow"]
         col = box.column(align=True)
         row = col.row(align=True)
         row.operator('sverchok.install_or_update_dependencies_operator', text="Install or Update all packages (Upgrade PIP FIRST)").serialized_items=";".join(package_names_allatonce)

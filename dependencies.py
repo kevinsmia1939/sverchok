@@ -23,13 +23,21 @@ instead of actual module, so that one can execute another version of code:
 
 todo: Create dependencies.txt file and import modules from there
 """
-import bpy
 import logging
+import os
+import site
+import sys
+
+import bpy
 
 import sverchok.settings as settings
 
 
 logger = logging.getLogger('sverchok')
+
+user_site = site.getusersitepackages()
+if os.path.isdir(user_site) and user_site not in sys.path:
+    sys.path.insert(0, user_site)
 
 
 class SvDependency():
@@ -131,6 +139,14 @@ try:
     skimage_d.module = skimage
 except ImportError:
     skimage = None
+
+pyvista_d = sv_dependencies["pyvista"] = SvDependency("pyvista", "https://pyvista.org/")
+pyvista_d.pip_installable = True
+try:
+    import pyvista
+    pyvista_d.module = pyvista
+except ImportError:
+    pyvista = None
 
 mcubes_d = sv_dependencies["mcubes"] = SvDependency("mcubes", "https://github.com/pmneila/PyMCubes")
 try:

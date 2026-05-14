@@ -445,6 +445,7 @@
         - SvMeshJoinNodeMk2
         - ---
         - SvFillsHoleNodeMK2
+        - SvSurfaceSideFillNode
         - SvRecalcNormalsNode
         - SvFlipNormalsNode
         - ---
