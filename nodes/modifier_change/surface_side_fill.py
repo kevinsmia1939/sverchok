@@ -11,7 +11,9 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
 from mathutils.bvhtree import BVHTree
 
 from sverchok.data_structure import list_match_func, list_match_modes, updateNode
+from sverchok.dependencies import mcubes
 from sverchok.node_tree import SverchCustomTreeNode
+from sverchok.utils.marching_cubes import isosurface_np
 
 
 SURFACE_SIDE_ITEMS = [
@@ -120,11 +122,11 @@ def _make_grid(bounds_min, bounds_max, samples_x, samples_y, samples_z):
     extents = np.where(extents == 0.0, 1.0, extents)
     spacing = extents / cell_counts
     origin = np.asarray(bounds_min, dtype=float) - spacing
-    cell_dimensions = cell_counts + 2
-    x_coords = origin[0] + spacing[0] * (np.arange(cell_dimensions[0], dtype=float) + 0.5)
-    y_coords = origin[1] + spacing[1] * (np.arange(cell_dimensions[1], dtype=float) + 0.5)
-    z_coords = origin[2] + spacing[2] * (np.arange(cell_dimensions[2], dtype=float) + 0.5)
-    return origin, spacing, x_coords, y_coords, z_coords, cell_dimensions
+    point_dimensions = cell_counts + 3
+    x_coords = origin[0] + spacing[0] * np.arange(point_dimensions[0], dtype=float)
+    y_coords = origin[1] + spacing[1] * np.arange(point_dimensions[1], dtype=float)
+    z_coords = origin[2] + spacing[2] * np.arange(point_dimensions[2], dtype=float)
+    return origin, spacing, x_coords, y_coords, z_coords, point_dimensions
 
 
 def _feature_normal(vertices, faces, face_normals, edge_faces, vert_faces, face_index, location, epsilon):
@@ -212,7 +214,7 @@ def _signed_distance(bvh, point, vertices, faces, face_normals, edge_faces, vert
     return signed
 
 
-def _rasterize_volume(
+def _sample_scalar_field(
     vertices,
     faces,
     bounds_vertices,
@@ -255,10 +257,10 @@ def _rasterize_volume(
     if flip_side:
         fill_inside = not fill_inside
 
-    occupied = np.zeros(tuple(full_dimensions.tolist()), dtype=bool)
+    field = np.empty(tuple(full_dimensions.tolist()), dtype=np.float32)
     for x_index, x in enumerate(x_coords):
         for y_index, y in enumerate(y_coords):
-            column = occupied[x_index, y_index]
+            column = field[x_index, y_index]
             for z_index, z in enumerate(z_coords):
                 signed = _signed_distance(
                     bvh,
@@ -272,64 +274,55 @@ def _rasterize_volume(
                 )
                 if signed is None:
                     continue
-                inside = signed < 0.0
-                column[z_index] = inside if fill_inside else not inside
+                surface_value = signed if fill_inside else -signed
+                box_value = max(
+                    bounds_min[0] - x,
+                    x - bounds_max[0],
+                    bounds_min[1] - y,
+                    y - bounds_max[1],
+                    bounds_min[2] - z,
+                    z - bounds_max[2],
+                )
+                column[z_index] = max(surface_value, box_value)
 
-    return occupied, origin, spacing
+    return field, origin, spacing
 
 
-def _voxel_surface_mesh(occupied, origin, spacing):
-    if occupied.size == 0 or not occupied.any():
+def _scale_vertices(vertices, origin, spacing):
+    verts = np.asarray(vertices, dtype=float)
+    if len(verts) == 0:
+        return verts
+
+    verts = verts.copy()
+    verts[:, 0] = origin[0] + verts[:, 0] * spacing[0]
+    verts[:, 1] = origin[1] + verts[:, 1] * spacing[1]
+    verts[:, 2] = origin[2] + verts[:, 2] * spacing[2]
+    return verts
+
+
+def _faces_to_mesh(vertices, faces):
+    if len(vertices) == 0 or len(faces) == 0:
         return [], [], []
 
-    nx, ny, nz = occupied.shape
-    x_coords = origin[0] + spacing[0] * np.arange(nx + 1, dtype=float)
-    y_coords = origin[1] + spacing[1] * np.arange(ny + 1, dtype=float)
-    z_coords = origin[2] + spacing[2] * np.arange(nz + 1, dtype=float)
-
-    vertices = []
-    faces = []
-    vertex_map = -np.ones((nx + 1, ny + 1, nz + 1), dtype=int)
-
-    def corner_vertex(i, j, k):
-        idx = vertex_map[i, j, k]
-        if idx != -1:
-            return idx
-        idx = len(vertices)
-        vertex_map[i, j, k] = idx
-        vertices.append((float(x_coords[i]), float(y_coords[j]), float(z_coords[k])))
-        return idx
-
-    def emit_face(corners):
-        faces.append([corner_vertex(*corner) for corner in corners])
-
-    for x in range(nx):
-        for y in range(ny):
-            for z in range(nz):
-                if not occupied[x, y, z]:
-                    continue
-
-                if x == 0 or not occupied[x - 1, y, z]:
-                    emit_face([(x, y, z), (x, y, z + 1), (x, y + 1, z + 1), (x, y + 1, z)])
-                if x == nx - 1 or not occupied[x + 1, y, z]:
-                    emit_face([(x + 1, y, z), (x + 1, y + 1, z), (x + 1, y + 1, z + 1), (x + 1, y, z + 1)])
-                if y == 0 or not occupied[x, y - 1, z]:
-                    emit_face([(x, y, z), (x + 1, y, z), (x + 1, y, z + 1), (x, y, z + 1)])
-                if y == ny - 1 or not occupied[x, y + 1, z]:
-                    emit_face([(x, y + 1, z), (x, y + 1, z + 1), (x + 1, y + 1, z + 1), (x + 1, y + 1, z)])
-                if z == 0 or not occupied[x, y, z - 1]:
-                    emit_face([(x, y, z), (x, y + 1, z), (x + 1, y + 1, z), (x + 1, y, z)])
-                if z == nz - 1 or not occupied[x, y, z + 1]:
-                    emit_face([(x, y, z + 1), (x + 1, y, z + 1), (x + 1, y + 1, z + 1), (x, y + 1, z + 1)])
-
+    face_list = [list(map(int, face)) for face in faces]
     edges = sorted(
         {
             tuple(sorted((face[index], face[(index + 1) % len(face)])))
-            for face in faces
+            for face in face_list
             for index in range(len(face))
         }
     )
-    return vertices, [list(edge) for edge in edges], faces
+    return vertices.tolist(), [list(edge) for edge in edges], face_list
+
+
+def _extract_surface_mesh(field, origin, spacing):
+    if mcubes is not None:
+        vertices, faces = mcubes.marching_cubes(field, 0.0)
+    else:
+        vertices, faces = isosurface_np(field, 0.0)
+
+    vertices = _scale_vertices(vertices, origin, spacing)
+    return _faces_to_mesh(vertices, faces)
 
 
 def fill_surface_side(
@@ -343,7 +336,7 @@ def fill_surface_side(
     padding,
     flip_side,
 ):
-    rasterized = _rasterize_volume(
+    rasterized = _sample_scalar_field(
         vertices,
         faces,
         bounds_vertices,
@@ -357,8 +350,8 @@ def fill_surface_side(
     if rasterized is None:
         return [], [], []
 
-    occupied, origin, spacing = rasterized
-    return _voxel_surface_mesh(occupied, origin, spacing)
+    field, origin, spacing = rasterized
+    return _extract_surface_mesh(field, origin, spacing)
 
 
 class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
