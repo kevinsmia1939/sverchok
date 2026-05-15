@@ -8,41 +8,43 @@
 import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
+from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 from sverchok.data_structure import list_match_func, list_match_modes, updateNode
+from sverchok.dependencies import mcubes
 from sverchok.node_tree import SverchCustomTreeNode
+from sverchok.utils.marching_cubes import isosurface_np
 
 
 SURFACE_SIDE_ITEMS = [
-    ("SIDE_A", "Side A", "Fill one side of the input surface"),
-    ("SIDE_B", "Side B", "Fill the opposite side of the input surface"),
+    ("INSIDE", "Inside", "Fill the inside of the input surface"),
+    ("OUTSIDE", "Outside", "Fill the outside of the input surface"),
 ]
 
 
-def _polydata_from_sverchok_mesh(vertices, faces):
-    face_data = []
-    for face in faces:
-        if len(face) >= 3:
-            face_data.extend([len(face), *face])
+def _has_vertices(values):
+    if values is None:
+        return False
+    try:
+        return len(values) > 0
+    except TypeError:
+        return False
 
-    if not vertices or not face_data:
-        return None
 
-    import pyvista as pv
+def _poly_faces(vertices, faces):
+    if vertices is None or faces is None:
+        return None, None
 
-    polydata = pv.PolyData(
-        np.asarray(vertices, dtype=float),
-        np.asarray(face_data, dtype=np.int64),
-    )
-    return (
-        polydata.clean()
-        .triangulate()
-        .compute_normals(
-            consistent_normals=True,
-            auto_orient_normals=True,
-            inplace=False,
-        )
-    )
+    vertices = np.asarray(vertices, dtype=float)
+    if len(vertices) == 0:
+        return None, None
+
+    poly_faces = [tuple(int(index) for index in face) for face in faces if len(face) >= 3]
+    if not poly_faces:
+        return None, None
+
+    return vertices, poly_faces
 
 
 def _bounds_from_vertices(vertices):
@@ -53,48 +55,142 @@ def _bounds_from_vertices(vertices):
 
 
 def _make_grid(bounds_min, bounds_max, samples_x, samples_y, samples_z):
-    import pyvista as pv
-
-    dimensions = (
-        max(int(samples_x), 2),
-        max(int(samples_y), 2),
-        max(int(samples_z), 2),
+    dimensions = np.array(
+        [
+            max(int(samples_x), 2),
+            max(int(samples_y), 2),
+            max(int(samples_z), 2),
+        ],
+        dtype=int,
     )
-    extents = bounds_max - bounds_min
+    extents = np.asarray(bounds_max - bounds_min, dtype=float)
     extents = np.where(extents == 0.0, 1.0, extents)
-    spacing = tuple(extents / (np.asarray(dimensions) - 1))
-    return pv.ImageData(
-        dimensions=dimensions,
-        spacing=spacing,
-        origin=tuple(bounds_min),
+    spacing = extents / (dimensions - 1)
+    origin = np.asarray(bounds_min, dtype=float) - spacing
+    full_dimensions = dimensions + 2
+    x_coords = origin[0] + spacing[0] * np.arange(full_dimensions[0], dtype=float)
+    y_coords = origin[1] + spacing[1] * np.arange(full_dimensions[1], dtype=float)
+    z_coords = origin[2] + spacing[2] * np.arange(full_dimensions[2], dtype=float)
+    return origin, spacing, x_coords, y_coords, z_coords, full_dimensions
+
+
+def _collect_scanline_hits(bvh, y, z, x_start, x_end, epsilon):
+    axis = Vector((1.0, 0.0, 0.0))
+    origin = Vector((x_start, y, z))
+    remaining = x_end - x_start
+    hits = []
+
+    while remaining > epsilon:
+        location, normal, index, distance = bvh.ray_cast(origin, axis, remaining)
+        if index is None or location is None:
+            break
+
+        hit_x = float(location.x)
+        if not hits or abs(hit_x - hits[-1]) > epsilon:
+            hits.append(hit_x)
+
+        origin = location + axis * epsilon
+        remaining = x_end - origin.x
+
+    return np.asarray(hits, dtype=float)
+
+
+def _rasterize_volume(
+    vertices,
+    faces,
+    bounds_vertices,
+    side,
+    samples_x,
+    samples_y,
+    samples_z,
+    padding,
+    flip_side,
+):
+    verts, poly_faces = _poly_faces(vertices, faces)
+    if verts is None or poly_faces is None:
+        return None
+
+    bvh = BVHTree.FromPolygons(verts.tolist(), poly_faces, all_triangles=False, epsilon=0.0)
+
+    if _has_vertices(bounds_vertices):
+        bounds_min, bounds_max = _bounds_from_vertices(bounds_vertices)
+    else:
+        bounds_min, bounds_max = _bounds_from_vertices(verts)
+
+    padding = max(float(padding), 0.0)
+    if padding:
+        span = bounds_max - bounds_min
+        span = np.where(span == 0.0, 1.0, span)
+        bounds_min = bounds_min - span * padding
+        bounds_max = bounds_max + span * padding
+
+    origin, spacing, x_coords, y_coords, z_coords, full_dimensions = _make_grid(
+        bounds_min,
+        bounds_max,
+        samples_x,
+        samples_y,
+        samples_z,
     )
 
+    epsilon = max(float(np.max(spacing)) * 1e-6, 1e-9)
+    x_start = float(x_coords[0] - spacing[0])
+    x_end = float(x_coords[-1] + spacing[0])
+    inner_x = x_coords[1:-1]
+    fill_inside = side == "INSIDE"
+    if flip_side:
+        fill_inside = not fill_inside
 
-def _polydata_to_sverchok_mesh(polydata):
-    if not polydata.is_all_triangles:
-        polydata = polydata.triangulate()
+    volume = np.zeros(tuple(full_dimensions.tolist()), dtype=np.float32)
+    for y_index, y in enumerate(y_coords[1:-1], start=1):
+        for z_index, z in enumerate(z_coords[1:-1], start=1):
+            hits = _collect_scanline_hits(bvh, float(y), float(z), x_start, x_end, epsilon)
+            if hits.size == 0:
+                selected = np.zeros_like(inner_x, dtype=bool)
+                if not fill_inside:
+                    selected = np.ones_like(inner_x, dtype=bool)
+            else:
+                inside = (np.searchsorted(hits, inner_x, side="right") % 2) == 1
+                selected = inside if fill_inside else ~inside
+            volume[1:-1, y_index, z_index] = selected.astype(np.float32)
 
-    polydata = polydata.flip_faces()
+    return volume, origin, spacing
 
-    faces = []
-    offset = 0
-    raw_faces = polydata.faces
-    while offset < len(raw_faces):
-        face_size = int(raw_faces[offset])
-        start = offset + 1
-        end = start + face_size
-        faces.append([int(index) for index in raw_faces[start:end]])
-        offset = end
 
+def _scale_vertices(vertices, origin, spacing):
+    verts = np.asarray(vertices, dtype=float)
+    if len(verts) == 0:
+        return verts
+
+    verts = verts.copy()
+    verts[:, 0] = origin[0] + verts[:, 0] * spacing[0]
+    verts[:, 1] = origin[1] + verts[:, 1] * spacing[1]
+    verts[:, 2] = origin[2] + verts[:, 2] * spacing[2]
+    return verts
+
+
+def _faces_to_mesh(vertices, faces):
+    if len(vertices) == 0 or len(faces) == 0:
+        return [], [], []
+
+    face_list = [list(map(int, face)) for face in faces]
     edges = sorted(
         {
             tuple(sorted((face[index], face[(index + 1) % len(face)])))
-            for face in faces
+            for face in face_list
             for index in range(len(face))
         }
     )
+    return vertices.tolist(), [list(edge) for edge in edges], face_list
 
-    return polydata.points.tolist(), [list(edge) for edge in edges], faces
+
+def _extract_surface_mesh(volume, origin, spacing):
+    if mcubes is not None:
+        vertices, faces = mcubes.marching_cubes(volume, 0.5)
+    else:
+        vertices, faces = isosurface_np(volume, 0.5)
+
+    vertices = _scale_vertices(vertices, origin, spacing)
+    return _faces_to_mesh(vertices, faces)
 
 
 def fill_surface_side(
@@ -108,35 +204,22 @@ def fill_surface_side(
     padding,
     flip_side,
 ):
-    surface = _polydata_from_sverchok_mesh(vertices, faces)
-    if surface is None:
+    rasterized = _rasterize_volume(
+        vertices,
+        faces,
+        bounds_vertices,
+        side,
+        samples_x,
+        samples_y,
+        samples_z,
+        padding,
+        flip_side,
+    )
+    if rasterized is None:
         return [], [], []
 
-    if bounds_vertices:
-        bounds_min, bounds_max = _bounds_from_vertices(bounds_vertices)
-    else:
-        bounds_min, bounds_max = _bounds_from_vertices(vertices)
-
-    padding = max(float(padding), 0.0)
-    if padding:
-        span = bounds_max - bounds_min
-        bounds_min = bounds_min - span * padding
-        bounds_max = bounds_max + span * padding
-
-    grid = _make_grid(bounds_min, bounds_max, samples_x, samples_y, samples_z)
-
-    invert = side == "SIDE_A"
-    if flip_side:
-        invert = not invert
-
-    clipped = grid.clip_surface(surface, invert=invert)
-    polydata = (
-        clipped.extract_surface(algorithm="dataset_surface")
-        .clean()
-        .triangulate()
-    )
-
-    return _polydata_to_sverchok_mesh(polydata)
+    volume, origin, spacing = rasterized
+    return _extract_surface_mesh(volume, origin, spacing)
 
 
 class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
@@ -153,7 +236,7 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
         name="Side",
         description="Which side of the input surface to fill",
         items=SURFACE_SIDE_ITEMS,
-        default="SIDE_A",
+        default="INSIDE",
         update=updateNode,
     )
 
