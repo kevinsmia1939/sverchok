@@ -8,13 +8,10 @@
 import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
-from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 from sverchok.data_structure import list_match_func, list_match_modes, updateNode
-from sverchok.dependencies import mcubes
 from sverchok.node_tree import SverchCustomTreeNode
-from sverchok.utils.marching_cubes import isosurface_np
 
 
 SURFACE_SIDE_ITEMS = [
@@ -40,11 +37,67 @@ def _poly_faces(vertices, faces):
     if len(vertices) == 0:
         return None, None
 
-    poly_faces = [tuple(int(index) for index in face) for face in faces if len(face) >= 3]
+    poly_faces = []
+    for face in faces:
+        if len(face) < 3:
+            continue
+        indices = [int(index) for index in face]
+        if len(indices) == 3:
+            poly_faces.append(tuple(indices))
+        else:
+            root = indices[0]
+            for i in range(1, len(indices) - 1):
+                poly_faces.append((root, indices[i], indices[i + 1]))
     if not poly_faces:
         return None, None
 
     return vertices, poly_faces
+
+
+def _mesh_topology(vertices, faces):
+    face_normals = []
+    edge_faces = {}
+    vert_faces = {}
+
+    for face_index, face in enumerate(faces):
+        if len(face) != 3:
+            continue
+
+        a, b, c = face
+        tri = vertices[np.array((a, b, c), dtype=int)]
+        normal = np.cross(tri[1] - tri[0], tri[2] - tri[0])
+        length = np.linalg.norm(normal)
+        if length > 0.0:
+            normal = normal / length
+        face_normals.append(normal)
+
+        for vertex_index in face:
+            vert_faces.setdefault(vertex_index, []).append(face_index)
+
+        for edge in ((a, b), (b, c), (c, a)):
+            key = tuple(sorted(edge))
+            edge_faces.setdefault(key, []).append(face_index)
+
+    return np.asarray(face_normals, dtype=float), edge_faces, vert_faces
+
+
+def _triangle_barycentric(point, tri):
+    a, b, c = tri
+    v0 = b - a
+    v1 = c - a
+    v2 = point - a
+    d00 = np.dot(v0, v0)
+    d01 = np.dot(v0, v1)
+    d11 = np.dot(v1, v1)
+    d20 = np.dot(v2, v0)
+    d21 = np.dot(v2, v1)
+    denom = d00 * d11 - d01 * d01
+    if abs(denom) < 1e-20:
+        return np.array((1.0, 0.0, 0.0), dtype=float)
+    v = (d11 * d20 - d01 * d21) / denom
+    w = (d00 * d21 - d01 * d20) / denom
+    u = 1.0 - v - w
+    return np.array((u, v, w), dtype=float)
 
 
 def _bounds_from_vertices(vertices):
@@ -55,44 +108,108 @@ def _bounds_from_vertices(vertices):
 
 
 def _make_grid(bounds_min, bounds_max, samples_x, samples_y, samples_z):
-    dimensions = np.array(
+    cell_counts = np.array(
         [
-            max(int(samples_x), 2),
-            max(int(samples_y), 2),
-            max(int(samples_z), 2),
+            max(int(samples_x), 1),
+            max(int(samples_y), 1),
+            max(int(samples_z), 1),
         ],
         dtype=int,
     )
     extents = np.asarray(bounds_max - bounds_min, dtype=float)
     extents = np.where(extents == 0.0, 1.0, extents)
-    spacing = extents / (dimensions - 1)
+    spacing = extents / cell_counts
     origin = np.asarray(bounds_min, dtype=float) - spacing
-    full_dimensions = dimensions + 2
-    x_coords = origin[0] + spacing[0] * np.arange(full_dimensions[0], dtype=float)
-    y_coords = origin[1] + spacing[1] * np.arange(full_dimensions[1], dtype=float)
-    z_coords = origin[2] + spacing[2] * np.arange(full_dimensions[2], dtype=float)
-    return origin, spacing, x_coords, y_coords, z_coords, full_dimensions
+    cell_dimensions = cell_counts + 2
+    x_coords = origin[0] + spacing[0] * (np.arange(cell_dimensions[0], dtype=float) + 0.5)
+    y_coords = origin[1] + spacing[1] * (np.arange(cell_dimensions[1], dtype=float) + 0.5)
+    z_coords = origin[2] + spacing[2] * (np.arange(cell_dimensions[2], dtype=float) + 0.5)
+    return origin, spacing, x_coords, y_coords, z_coords, cell_dimensions
 
 
-def _collect_scanline_hits(bvh, y, z, x_start, x_end, epsilon):
-    axis = Vector((1.0, 0.0, 0.0))
-    origin = Vector((x_start, y, z))
-    remaining = x_end - x_start
-    hits = []
+def _feature_normal(vertices, faces, face_normals, edge_faces, vert_faces, face_index, location, epsilon):
+    tri_indices = faces[face_index]
+    tri = vertices[np.asarray(tri_indices, dtype=int)]
+    weights = _triangle_barycentric(location, tri)
 
-    while remaining > epsilon:
-        location, normal, index, distance = bvh.ray_cast(origin, axis, remaining)
-        if index is None or location is None:
-            break
+    zero_mask = np.abs(weights) <= epsilon
+    if zero_mask.sum() == 0:
+        return face_normals[face_index]
 
-        hit_x = float(location.x)
-        if not hits or abs(hit_x - hits[-1]) > epsilon:
-            hits.append(hit_x)
+    if zero_mask.sum() == 1:
+        # Edge case
+        edge_positions = np.flatnonzero(~zero_mask)
+        edge_key = tuple(sorted((tri_indices[edge_positions[0]], tri_indices[edge_positions[1]])))
+        adj_faces = edge_faces.get(edge_key, [])
+        normals = face_normals[adj_faces] if adj_faces else face_normals[face_index:face_index + 1]
+        normal = normals.sum(axis=0)
+        length = np.linalg.norm(normal)
+        if length > 0.0:
+            normal = normal / length
+        return normal
 
-        origin = location + axis * epsilon
-        remaining = x_end - origin.x
+    # Vertex case
+    vertex_pos = int(np.flatnonzero(~zero_mask)[0])
+    vertex_index = tri_indices[vertex_pos]
+    adj_faces = vert_faces.get(vertex_index, [])
+    if not adj_faces:
+        return face_normals[face_index]
 
-    return np.asarray(hits, dtype=float)
+    point_vec = vertices[vertex_index]
+    normal = np.zeros(3, dtype=float)
+    for adj_face in adj_faces:
+        adj_tri_indices = faces[adj_face]
+        adj_tri = vertices[np.asarray(adj_tri_indices, dtype=int)]
+        adj_normal = face_normals[adj_face]
+        other = [idx for idx in adj_tri_indices if idx != vertex_index]
+        if len(other) != 2:
+            continue
+        v1 = vertices[other[0]] - point_vec
+        v2 = vertices[other[1]] - point_vec
+        v1_len = np.linalg.norm(v1)
+        v2_len = np.linalg.norm(v2)
+        if v1_len == 0.0 or v2_len == 0.0:
+            continue
+        v1 /= v1_len
+        v2 /= v2_len
+        alpha = np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
+        normal += alpha * adj_normal
+
+    length = np.linalg.norm(normal)
+    if length > 0.0:
+        normal = normal / length
+    else:
+        normal = face_normals[face_index]
+    return normal
+
+
+def _signed_distance(bvh, point, vertices, faces, face_normals, edge_faces, vert_faces, epsilon):
+    location, normal, index, distance = bvh.find_nearest(point)
+    if location is None or normal is None or index is None:
+        return None
+
+    point_vec = np.asarray(point, dtype=float)
+    location_vec = np.asarray(location, dtype=float)
+    delta = point_vec - location_vec
+    dist = np.linalg.norm(delta)
+    if dist <= epsilon:
+        return 0.0
+
+    feature_normal = _feature_normal(
+        vertices,
+        faces,
+        face_normals,
+        edge_faces,
+        vert_faces,
+        index,
+        location_vec,
+        epsilon,
+    )
+
+    # Match vtkImplicitPolyDataDistance sign convention:
+    # negative inside, positive outside.
+    signed = dist if np.dot(delta, feature_normal) > 0.0 else -dist
+    return signed
 
 
 def _rasterize_volume(
@@ -111,6 +228,7 @@ def _rasterize_volume(
         return None
 
     bvh = BVHTree.FromPolygons(verts.tolist(), poly_faces, all_triangles=False, epsilon=0.0)
+    face_normals, edge_faces, vert_faces = _mesh_topology(verts, poly_faces)
 
     if _has_vertices(bounds_vertices):
         bounds_min, bounds_max = _bounds_from_vertices(bounds_vertices)
@@ -133,64 +251,85 @@ def _rasterize_volume(
     )
 
     epsilon = max(float(np.max(spacing)) * 1e-6, 1e-9)
-    x_start = float(x_coords[0] - spacing[0])
-    x_end = float(x_coords[-1] + spacing[0])
-    inner_x = x_coords[1:-1]
     fill_inside = side == "INSIDE"
     if flip_side:
         fill_inside = not fill_inside
 
-    volume = np.zeros(tuple(full_dimensions.tolist()), dtype=np.float32)
-    for y_index, y in enumerate(y_coords[1:-1], start=1):
-        for z_index, z in enumerate(z_coords[1:-1], start=1):
-            hits = _collect_scanline_hits(bvh, float(y), float(z), x_start, x_end, epsilon)
-            if hits.size == 0:
-                selected = np.zeros_like(inner_x, dtype=bool)
-                if not fill_inside:
-                    selected = np.ones_like(inner_x, dtype=bool)
-            else:
-                inside = (np.searchsorted(hits, inner_x, side="right") % 2) == 1
-                selected = inside if fill_inside else ~inside
-            volume[1:-1, y_index, z_index] = selected.astype(np.float32)
+    occupied = np.zeros(tuple(full_dimensions.tolist()), dtype=bool)
+    for x_index, x in enumerate(x_coords):
+        for y_index, y in enumerate(y_coords):
+            column = occupied[x_index, y_index]
+            for z_index, z in enumerate(z_coords):
+                signed = _signed_distance(
+                    bvh,
+                    (float(x), float(y), float(z)),
+                    verts,
+                    poly_faces,
+                    face_normals,
+                    edge_faces,
+                    vert_faces,
+                    epsilon,
+                )
+                if signed is None:
+                    continue
+                inside = signed < 0.0
+                column[z_index] = inside if fill_inside else not inside
 
-    return volume, origin, spacing
-
-
-def _scale_vertices(vertices, origin, spacing):
-    verts = np.asarray(vertices, dtype=float)
-    if len(verts) == 0:
-        return verts
-
-    verts = verts.copy()
-    verts[:, 0] = origin[0] + verts[:, 0] * spacing[0]
-    verts[:, 1] = origin[1] + verts[:, 1] * spacing[1]
-    verts[:, 2] = origin[2] + verts[:, 2] * spacing[2]
-    return verts
+    return occupied, origin, spacing
 
 
-def _faces_to_mesh(vertices, faces):
-    if len(vertices) == 0 or len(faces) == 0:
+def _voxel_surface_mesh(occupied, origin, spacing):
+    if occupied.size == 0 or not occupied.any():
         return [], [], []
 
-    face_list = [list(map(int, face)) for face in faces]
+    nx, ny, nz = occupied.shape
+    x_coords = origin[0] + spacing[0] * np.arange(nx + 1, dtype=float)
+    y_coords = origin[1] + spacing[1] * np.arange(ny + 1, dtype=float)
+    z_coords = origin[2] + spacing[2] * np.arange(nz + 1, dtype=float)
+
+    vertices = []
+    faces = []
+    vertex_map = -np.ones((nx + 1, ny + 1, nz + 1), dtype=int)
+
+    def corner_vertex(i, j, k):
+        idx = vertex_map[i, j, k]
+        if idx != -1:
+            return idx
+        idx = len(vertices)
+        vertex_map[i, j, k] = idx
+        vertices.append((float(x_coords[i]), float(y_coords[j]), float(z_coords[k])))
+        return idx
+
+    def emit_face(corners):
+        faces.append([corner_vertex(*corner) for corner in corners])
+
+    for x in range(nx):
+        for y in range(ny):
+            for z in range(nz):
+                if not occupied[x, y, z]:
+                    continue
+
+                if x == 0 or not occupied[x - 1, y, z]:
+                    emit_face([(x, y, z), (x, y, z + 1), (x, y + 1, z + 1), (x, y + 1, z)])
+                if x == nx - 1 or not occupied[x + 1, y, z]:
+                    emit_face([(x + 1, y, z), (x + 1, y + 1, z), (x + 1, y + 1, z + 1), (x + 1, y, z + 1)])
+                if y == 0 or not occupied[x, y - 1, z]:
+                    emit_face([(x, y, z), (x + 1, y, z), (x + 1, y, z + 1), (x, y, z + 1)])
+                if y == ny - 1 or not occupied[x, y + 1, z]:
+                    emit_face([(x, y + 1, z), (x, y + 1, z + 1), (x + 1, y + 1, z + 1), (x + 1, y + 1, z)])
+                if z == 0 or not occupied[x, y, z - 1]:
+                    emit_face([(x, y, z), (x, y + 1, z), (x + 1, y + 1, z), (x + 1, y, z)])
+                if z == nz - 1 or not occupied[x, y, z + 1]:
+                    emit_face([(x, y, z + 1), (x + 1, y, z + 1), (x + 1, y + 1, z + 1), (x, y + 1, z + 1)])
+
     edges = sorted(
         {
             tuple(sorted((face[index], face[(index + 1) % len(face)])))
-            for face in face_list
+            for face in faces
             for index in range(len(face))
         }
     )
-    return vertices.tolist(), [list(edge) for edge in edges], face_list
-
-
-def _extract_surface_mesh(volume, origin, spacing):
-    if mcubes is not None:
-        vertices, faces = mcubes.marching_cubes(volume, 0.5)
-    else:
-        vertices, faces = isosurface_np(volume, 0.5)
-
-    vertices = _scale_vertices(vertices, origin, spacing)
-    return _faces_to_mesh(vertices, faces)
+    return vertices, [list(edge) for edge in edges], faces
 
 
 def fill_surface_side(
@@ -218,8 +357,8 @@ def fill_surface_side(
     if rasterized is None:
         return [], [], []
 
-    volume, origin, spacing = rasterized
-    return _extract_surface_mesh(volume, origin, spacing)
+    occupied, origin, spacing = rasterized
+    return _voxel_surface_mesh(occupied, origin, spacing)
 
 
 class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
