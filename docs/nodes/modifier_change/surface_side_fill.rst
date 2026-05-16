@@ -30,8 +30,10 @@ Inputs
 Parameters
 ----------
 
+- **Fill Side**. Choose whether the cap is kept as generated or flipped to the
+  opposite side.
 - **Correct normals**. Recalculate face normals after the boundary is filled.
-- **Invert cap**. Flip the newly created cap faces.
+- **Invert cap**. Legacy flip toggle kept for older saved node trees.
 
 Outputs
 -------
@@ -48,8 +50,10 @@ Connect the output of :doc:`Marching Cubes </nodes/surface/marching_cubes>`
 directly into this node. The input mesh geometry is preserved; only boundary
 loops are closed.
 
-``Correct normals`` is usually enough for clean output. Use ``Invert cap`` only
-when the cap needs the opposite winding order for your downstream setup.
+``Correct normals`` is usually enough for clean output. Use ``Fill Side =
+Outer`` when the marching-cubes output has opposite winding, for example after
+using a negative iso value. ``Invert cap`` remains available for older saved
+node trees, but ``Fill Side`` is the preferred control.
 
 Examples of Usage
 -----------------

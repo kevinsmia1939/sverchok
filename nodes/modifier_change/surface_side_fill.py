@@ -7,7 +7,7 @@
 
 import bpy
 import bmesh
-from bpy.props import BoolProperty
+from bpy.props import BoolProperty, EnumProperty
 
 from sverchok.data_structure import dataCorrect, updateNode, zip_long_repeat
 from sverchok.node_tree import SverchCustomTreeNode
@@ -37,12 +37,12 @@ def _cap_boundary(vertices, faces, correct_normals, invert_cap):
     )
     cap_faces = fill_result.get("faces", [])
 
+    if invert_cap and cap_faces:
+        bmesh.ops.reverse_faces(bm, faces=cap_faces)
+
     if correct_normals:
         bm.normal_update()
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-
-    if invert_cap and cap_faces:
-        bmesh.ops.reverse_faces(bm, faces=cap_faces)
 
     verts, edges, polys = pydata_from_bmesh(bm)
     bm.clear()
@@ -60,6 +60,17 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
     bl_label = "Surface Side Fill"
     bl_icon = "MESH_GRID"
 
+    fill_side: EnumProperty(
+        name="Fill Side",
+        description="Choose which side of the cap should face outward",
+        items=[
+            ("INNER", "Inner", "Keep the cap orientation as generated"),
+            ("OUTER", "Outer", "Flip the cap orientation"),
+        ],
+        default="INNER",
+        update=updateNode,
+    )
+
     correct_normals: BoolProperty(
         name="Correct normals",
         description="Recalculate normals after filling the boundary",
@@ -69,7 +80,7 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
 
     invert_cap: BoolProperty(
         name="Invert cap",
-        description="Flip the newly created cap faces",
+        description="Legacy cap flip toggle. Kept for older saved node trees.",
         default=False,
         update=updateNode,
     )
@@ -84,10 +95,12 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
 
     def draw_buttons(self, context, layout):
         box = layout.box()
+        box.prop(self, "fill_side")
         box.prop(self, "correct_normals")
         box.prop(self, "invert_cap")
 
     def draw_buttons_ext(self, context, layout):
+        layout.prop(self, "fill_side")
         layout.prop(self, "correct_normals")
         layout.prop(self, "invert_cap")
 
@@ -106,11 +119,12 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
         faces_out = []
 
         for vertices, faces in zip_long_repeat(vertices_s, faces_s):
+            invert_cap = self.invert_cap or self.fill_side == "OUTER"
             verts, edges, polys = _cap_boundary(
                 vertices,
                 faces,
                 self.correct_normals,
-                self.invert_cap,
+                invert_cap,
             )
             verts_out.append(verts)
             edges_out.append(edges)
