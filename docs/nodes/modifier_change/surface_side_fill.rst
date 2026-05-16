@@ -11,9 +11,11 @@ already correct, but the boundary still needs to be closed to form a manifold
 mesh.
 
 The node builds a temporary BMesh from the incoming vertices and faces, finds
-the boundary edges, then uses Blender's ``bmesh.ops.holes_fill`` operator to
-create new faces over the open boundary. This preserves the incoming surface
-geometry and only adds the missing cap faces.
+the boundary edges, and closes broken boundary chains by adding a missing
+boundary corner on the bounding box side before filling. It then uses Blender's
+``bmesh.ops.holes_fill`` operator to create new faces over the open boundary.
+This preserves the incoming surface geometry and only adds the missing cap
+faces.
 
 Dependencies
 ------------
@@ -26,6 +28,8 @@ Inputs
 
 - **Vertices**. Vertices of the input mesh.
 - **Faces**. Faces of the input mesh.
+- **Bounds**. Optional bounding vertices used to locate the missing corner on
+  the box side. When not connected, the node uses the input vertices.
 
 Parameters
 ----------
@@ -53,7 +57,9 @@ loops are closed.
 ``Correct normals`` is usually enough for clean output. Use ``Fill Side =
 Outer`` when the marching-cubes output has opposite winding, for example after
 using a negative iso value. ``Invert cap`` remains available for older saved
-node trees, but ``Fill Side`` is the preferred control.
+node trees, but ``Fill Side`` is the preferred control. When a marching-cubes
+boundary drops a corner vertex, the node adds that corner back on the matching
+bounding-box side before filling the cap.
 
 Examples of Usage
 -----------------
