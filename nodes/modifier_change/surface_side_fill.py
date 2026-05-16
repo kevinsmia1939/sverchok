@@ -7,11 +7,10 @@
 
 import bpy
 import numpy as np
+import pyvista as pv
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty
-
 from sverchok.data_structure import list_match_func, list_match_modes, updateNode
 from sverchok.node_tree import SverchCustomTreeNode
-
 
 SURFACE_SIDE_ITEMS = [
     ("SIDE_A", "Side A", "Fill one side of the input surface"),
@@ -27,8 +26,6 @@ def _polydata_from_sverchok_mesh(vertices, faces):
 
     if not vertices or not face_data:
         return None
-
-    import pyvista as pv
 
     polydata = pv.PolyData(
         np.asarray(vertices, dtype=float),
@@ -53,8 +50,6 @@ def _bounds_from_vertices(vertices):
 
 
 def _make_grid(bounds_min, bounds_max, samples_x, samples_y, samples_z):
-    import pyvista as pv
-
     dimensions = (
         max(int(samples_x), 2),
         max(int(samples_y), 2),
@@ -93,7 +88,6 @@ def _polydata_to_sverchok_mesh(polydata):
             for index in range(len(face))
         }
     )
-
     return polydata.points.tolist(), [list(edge) for edge in edges], faces
 
 
@@ -106,7 +100,6 @@ def fill_surface_side(
     samples_y,
     samples_z,
     padding,
-    flip_side,
 ):
     surface = _polydata_from_sverchok_mesh(vertices, faces)
     if surface is None:
@@ -126,8 +119,6 @@ def fill_surface_side(
     grid = _make_grid(bounds_min, bounds_max, samples_x, samples_y, samples_z)
 
     invert = side == "SIDE_A"
-    if flip_side:
-        invert = not invert
 
     clipped = grid.clip_surface(surface, invert=invert)
     polydata = (
@@ -135,7 +126,6 @@ def fill_surface_side(
         .clean()
         .triangulate()
     )
-
     return _polydata_to_sverchok_mesh(polydata)
 
 
@@ -144,7 +134,6 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
     Triggers: surface side fill, half-space fill, marching cubes fill
     Tooltip: Fill one side of an incoming surface mesh
     """
-
     bl_idname = "SvSurfaceSideFillNode"
     bl_label = "Surface Side Fill"
     bl_icon = "MESH_GRID"
@@ -193,13 +182,6 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
         update=updateNode,
     )
 
-    flip_side: BoolProperty(
-        name="Flip Side",
-        description="Reverse which side of the surface is filled",
-        default=False,
-        update=updateNode,
-    )
-
     list_match: EnumProperty(
         name="List Match",
         description="Behavior on different list lengths, object level",
@@ -224,11 +206,9 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
     def draw_buttons(self, context, layout):
         row = layout.row(align=True)
         row.prop(self, "side", expand=True)
-        layout.prop(self, "flip_side", toggle=True)
 
     def draw_buttons_ext(self, context, layout):
         layout.prop(self, "side")
-        layout.prop(self, "flip_side")
         layout.prop(self, "list_match")
 
     def process(self):
@@ -277,7 +257,6 @@ class SvSurfaceSideFillNode(SverchCustomTreeNode, bpy.types.Node):
                 samples_y,
                 samples_z,
                 padding,
-                self.flip_side,
             )
             verts_out.append(verts)
             edges_out.append(edges)
